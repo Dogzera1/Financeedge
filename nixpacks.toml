@@ -1,5 +1,5 @@
 [phases.build]
-cmds = ["cd financeedge && npm install --omit=dev"]
+cmds = ["npm ci --omit=dev"]
 
 [start]
-cmd = "node financeedge/start.js"
+cmd = "node start.js"
