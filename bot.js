@@ -231,8 +231,10 @@ async function initTelegramBot() {
       const st = calcStakeUsdt(bk.current_usdt, signal.evPct, odds, signal.confidence);
       stakeUsdt = st.stakeUsdt;
       const stp = calcStopTakeProfit(signal.price, signal.direction, signal.atr, 1.5, 2.0);
-      stopLoss = stp.stopLoss;
-      takeProfit = stp.takeProfit;
+      if (stp) {
+        stopLoss = stp.stopLoss;
+        takeProfit = stp.takeProfit;
+      }
     }
     await reply(msg.chat.id, formatSignalMsg(signal, stakeUsdt, stopLoss, takeProfit));
   });
@@ -443,7 +445,12 @@ async function runAnalysisCycle() {
 
     const odds = 2.0;
     const { stakeUsdt, stakePct, kellyFraction } = calcStakeUsdt(currentBk.current_usdt, signal.evPct, odds, signal.confidence);
-    const { stopLoss, takeProfit } = calcStopTakeProfit(signal.price, signal.direction, signal.atr, 1.5, 2.0);
+    const stp = calcStopTakeProfit(signal.price, signal.direction, signal.atr, 1.5, 2.0);
+    if (!stp) {
+      log('INFO', 'RISK', `${signal.symbol}: ATR ausente e fallback desativado — trade bloqueado`);
+      continue;
+    }
+    const { stopLoss, takeProfit } = stp;
 
     const riskCheck = checkRiskGuards(currentBk.current_usdt, openCount, stakeUsdt, totalExposure);
     if (!riskCheck.ok) {

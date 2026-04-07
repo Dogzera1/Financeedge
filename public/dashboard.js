@@ -68,13 +68,15 @@ function rowHist(t, fx) {
 async function refresh() {
   try {
     setDot(true, 'carregando');
-    const [health, roi, open, hist, fx, ex] = await Promise.all([
+    const [health, roi, open, hist, fx, ex, risk, inds] = await Promise.all([
       jget('/health'),
       jget('/roi'),
       jget('/open-trades'),
       jget('/trades-history?limit=30'),
       jget('/fx/usdtbrl'),
       jget('/exchange-status'),
+      jget('/debug-risk'),
+      jget('/debug-indicators'),
     ]);
 
     const rate = fx?.rate || null;
@@ -104,6 +106,11 @@ async function refresh() {
 
     document.getElementById('meta').textContent =
       `modo=${health?.mode || '—'} | symbols=${(health?.symbols || []).join(', ') || '—'} | timeframe=${health?.timeframe || '—'} | circuito=${health?.circuitBreaker ? 'on' : 'off'}`;
+
+    const losses24 = risk?.losses24hUsdt;
+    const totalExp = risk?.totalExposureUsdt;
+    document.getElementById('riskMeta').textContent =
+      `losses24h=${losses24 != null ? money(losses24, 'USDT') : '—'} | exposure=${totalExp != null ? money(totalExp, 'USDT') : '—'} | wouldTrip=${risk?.wouldTrip ? 'sim' : 'não'}`;
 
     const openRows = document.getElementById('openRows');
     openRows.innerHTML = Array.isArray(open) && open.length

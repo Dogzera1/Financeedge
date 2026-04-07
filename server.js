@@ -6,7 +6,7 @@ const fs = require('fs');
 const initDatabase = require('./lib/database');
 const { log, sendJson, safeParse, httpGet, httpPost } = require('./lib/utils');
 const { initExchange, fetchOHLCV, fetchPrice, getCacheStatus, fetchUSDTBRL, fetchTicker, getExchangeStatus } = require('./lib/data-engine');
-const { generateSignal } = require('./lib/financial-ml');
+const { generateSignal, calcRSI, calcMACD, calcBollingerBands, calcATR, calcEMA } = require('./lib/financial-ml');
 const { calcStakeUsdt, calcStopTakeProfit, checkCircuitBreaker, CONFIG } = require('./lib/risk-manager');
 const { paperOpen, paperClose, calcUnrealizedPnL } = require('./lib/executor');
 
@@ -175,6 +175,7 @@ const server = http.createServer(async (req, res) => {
         ...st,
         symbol: SYMBOLS[0] || 'BTC/USDT',
         publicOk: !!sample,
+        tradeEnabled: false,
         sampleTicker: sample ? {
           last: sample.last || sample.close || null,
           bid: sample.bid || null,
@@ -290,7 +291,9 @@ const server = http.createServer(async (req, res) => {
 
           const odds = 2.0; // equivalente a 50/50 — ajustar conforme modelo
           const { stakeUsdt, stakePct, kellyFraction } = calcStakeUsdt(bk.current_usdt, evPct || 5, odds, confidence || 'MÉDIA');
-          const { stopLoss, takeProfit } = calcStopTakeProfit(price, direction, atr, 1.5, 2.0);
+          const stp = calcStopTakeProfit(price, direction, atr, 1.5, 2.0);
+          if (!stp) { sendJson(res, { ok: false, error: 'atr_required', hint: 'Defina ALLOW_FIXED_SL_FALLBACK=true para permitir fallback' }, 400); return; }
+          const { stopLoss, takeProfit } = stp;
 
           const execution = paperOpen(
             { symbol, direction, price, timeframe: tf || TIMEFRAME },
@@ -492,6 +495,77 @@ const server = http.createServer(async (req, res) => {
     // ── Cache de dados ──
     if (p === '/cache-status') {
       sendJson(res, getCacheStatus());
+      return;
+    }
+
+    // ── Debug: risco ──
+    if (p === '/debug-risk') {
+      const bk = stmts.getBankroll.get();
+      const openCount = stmts.openTradeCount.get()?.c || 0;
+      const openTrades = stmts.getOpenTrades.all();
+      const totalExposure = openTrades.reduce((s, t) => s + (t.stake_usdt || 0), 0);
+      const recentLosses = db.prepare(`
+        SELECT COALESCE(SUM(ABS(pnl_usdt)), 0) as losses
+        FROM trades
+        WHERE result = 'loss' AND closed_at >= datetime('now', '-24 hours')
+      `).get();
+      const losses24h = recentLosses?.losses || 0;
+      const wouldTrip = bk ? checkCircuitBreaker(bk.current_usdt, bk.initial_usdt, losses24h) : false;
+      sendJson(res, {
+        bankroll: bk ? { initial: bk.initial_usdt, current: bk.current_usdt } : null,
+        openTradesCount: openCount,
+        totalExposureUsdt: parseFloat(totalExposure.toFixed(4)),
+        losses24hUsdt: parseFloat(losses24h.toFixed(4)),
+        circuitBreakerPct: CONFIG.circuitBreakerPct,
+        wouldTrip,
+        circuitBreakerActive,
+      });
+      return;
+    }
+
+    // ── Debug: indicadores ──
+    if (p === '/debug-indicators') {
+      const timeframe = parsed.query.timeframe || TIMEFRAME;
+      const out = [];
+      for (const symbol of SYMBOLS) {
+        const candles = await fetchOHLCV(symbol, timeframe, 250);
+        const closes = candles.map(c => c.close);
+        const rsi = calcRSI(closes, 14);
+        const macd = calcMACD(closes);
+        const bb = calcBollingerBands(closes);
+        const atr = calcATR(candles);
+        const ema200 = calcEMA(closes, 200);
+        const last = closes[closes.length - 1] || null;
+        const regime = (ema200 != null && last != null) ? (last > ema200 ? 'bullish' : 'bearish') : 'unknown';
+        out.push({
+          symbol,
+          timeframe,
+          price: last,
+          rsi,
+          macdHist: macd?.histogram ?? null,
+          bbPosition: bb?.position ?? null,
+          atr,
+          ema200,
+          regime,
+        });
+      }
+      sendJson(res, out);
+      return;
+    }
+
+    // ── Debug: regime ──
+    if (p === '/debug-regime') {
+      const timeframe = parsed.query.timeframe || TIMEFRAME;
+      const out = [];
+      for (const symbol of SYMBOLS) {
+        const candles = await fetchOHLCV(symbol, timeframe, 250);
+        const closes = candles.map(c => c.close);
+        const ema200 = calcEMA(closes, 200);
+        const last = closes[closes.length - 1] || null;
+        const regime = (ema200 != null && last != null) ? (last > ema200 ? 'bullish' : 'bearish') : 'unknown';
+        out.push({ symbol, timeframe, price: last, ema200, regime });
+      }
+      sendJson(res, out);
       return;
     }
 
