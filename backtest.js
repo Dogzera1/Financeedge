@@ -10,6 +10,7 @@ const path = require('path');
 const { generateSignal } = require('./lib/financial-ml');
 const { calcStakeUsdt, calcStopTakeProfit } = require('./lib/risk-manager');
 const { paperOpen, paperClose } = require('./lib/executor');
+const probabilityCalibrator = require('./lib/probability-calibrator');
 
 // Configuração
 const SYMBOL = process.env.BACKTEST_SYMBOL || 'BTC/USDT';
@@ -304,6 +305,11 @@ async function runBacktest(dataFile) {
   console.log('📈 RELATÓRIO DE BACKTESTING');
   console.log('='.repeat(60));
   console.log(`Período: ${historicalData.length} candles`);
+  if (!metrics || metrics.totalTrades === 0) {
+    console.log('Trades: 0');
+    console.log('Sem métricas (nenhum trade).');
+    return metrics;
+  }
   console.log(`Trades: ${metrics.totalTrades} (${metrics.wins}W / ${metrics.losses}L)`);
   console.log(`Win Rate: ${metrics.winRate}%`);
   console.log(`Profit Factor: ${metrics.profitFactor}`);
@@ -314,7 +320,7 @@ async function runBacktest(dataFile) {
   console.log(`Sharpe Ratio: ${metrics.sharpeRatio}`);
 
   console.log('\n📊 Por Confiança:');
-  Object.keys(metrics.byConfidence).forEach(conf => {
+  Object.keys(metrics.byConfidence || {}).forEach(conf => {
     const data = metrics.byConfidence[conf];
     console.log(`  ${conf}: ${data.trades.length} trades | WR: ${data.winRate.toFixed(1)}% | P&L médio: $${data.avgPnl.toFixed(2)}`);
   });
@@ -345,21 +351,111 @@ async function runBacktest(dataFile) {
   return metrics;
 }
 
+function parseArgs(argv) {
+  const out = { _: [] };
+  for (const a of argv) {
+    if (!a.startsWith('--')) { out._.push(a); continue; }
+    const [k, vRaw] = a.slice(2).split('=');
+    const v = vRaw === undefined ? true : vRaw;
+    out[k] = v;
+  }
+  return out;
+}
+
+async function runWalkForward(dataFile, opts = {}) {
+  const trainCandles = parseInt(opts.train || process.env.WF_TRAIN_CANDLES || '1500');
+  const testCandles = parseInt(opts.test || process.env.WF_TEST_CANDLES || '500');
+  const stepCandles = parseInt(opts.step || process.env.WF_STEP_CANDLES || String(testCandles));
+  const lookback = parseInt(opts.lookback || process.env.BT_LOOKBACK_CANDLES || '100');
+
+  console.log('🧪 Walk-forward analysis');
+  console.log(`train=${trainCandles} | test=${testCandles} | step=${stepCandles} | lookback=${lookback}`);
+
+  const historicalData = loadHistoricalData(dataFile);
+  if (historicalData.length < (trainCandles + testCandles + lookback + 5)) {
+    console.error('❌ Dados insuficientes para walk-forward');
+    process.exit(1);
+  }
+
+  let bankroll = INITIAL_BANKROLL;
+  const folds = [];
+  const confLevel = confidencePriority[MIN_CONFIDENCE] || 2;
+
+  for (let start = 0; start + trainCandles + testCandles <= historicalData.length; start += stepCandles) {
+    const train = historicalData.slice(start, start + trainCandles);
+    const testStart = start + trainCandles;
+    const test = historicalData.slice(testStart, testStart + testCandles);
+
+    probabilityCalibrator.reset();
+    await probabilityCalibrator.calibrateFromBacktest(SYMBOL, train, TIMEFRAME);
+
+    const trades = [];
+    const startBankroll = bankroll;
+
+    for (let i = lookback; i < test.length - 1; i++) {
+      const window = test.slice(i - lookback, i);
+      const signal = generateSignal(window, SYMBOL, TIMEFRAME);
+      if (!signal) continue;
+      if ((confidencePriority[signal.confidence] || 0) < confLevel) continue;
+      if (signal.evPct < MIN_EV) continue;
+
+      const globalIndex = testStart + i;
+      const trade = simulateTrade(signal, globalIndex, historicalData, bankroll);
+      trades.push(trade);
+      bankroll += trade.pnlUsdt;
+      i = (trade.exitIndex - testStart); // avança dentro do test
+    }
+
+    const metrics = calculateMetrics(trades, startBankroll);
+    folds.push({
+      start,
+      train: [start, start + trainCandles],
+      test: [testStart, testStart + testCandles],
+      trades: metrics.totalTrades,
+      sharpe: metrics.sharpeRatio,
+      pnlPct: metrics.totalPnlPct,
+      maxDDPct: metrics.maxDrawdownPct,
+      endBankroll: bankroll,
+    });
+
+    console.log(`fold start=${start} trades=${metrics.totalTrades} sharpe=${metrics.sharpeRatio} pnl=${metrics.totalPnlPct}% dd=${metrics.maxDrawdownPct}%`);
+  }
+
+  const totalPnlPct = ((bankroll - INITIAL_BANKROLL) / INITIAL_BANKROLL) * 100;
+  console.log('✅ Walk-forward concluído');
+  console.log(`Banca final: $${bankroll.toFixed(2)} | P&L: ${totalPnlPct.toFixed(2)}% | folds=${folds.length}`);
+
+  const resultsFile = `walkforward_results_${Date.now()}.json`;
+  fs.writeFileSync(resultsFile, JSON.stringify({ config: { SYMBOL, TIMEFRAME, INITIAL_BANKROLL, MIN_CONFIDENCE, MIN_EV, trainCandles, testCandles, stepCandles, lookback }, folds }, null, 2));
+  console.log(`💾 Resultados: ${resultsFile}`);
+
+  return { bankroll, folds, resultsFile };
+}
+
 // Execução
 if (require.main === module) {
   const args = process.argv.slice(2);
-  if (args.length === 0) {
+  const flags = parseArgs(args);
+  if (flags._.length === 0) {
     console.log('Uso: node backtest.js <arquivo_csv>');
     console.log('Exemplo: node backtest.js btc_1h_2024.csv');
+    console.log('Walk-forward: node backtest.js <arquivo_csv> --walk-forward --train=1500 --test=500 --step=500');
     console.log('\nFormato CSV esperado: timestamp,open,high,low,close,volume');
     process.exit(1);
   }
 
-  const dataFile = args[0];
-  runBacktest(dataFile).catch(error => {
-    console.error('❌ Erro no backtesting:', error);
-    process.exit(1);
-  });
+  const dataFile = flags._[0];
+  if (flags['walk-forward'] || flags.walkforward) {
+    runWalkForward(dataFile, flags).catch(error => {
+      console.error('❌ Erro no walk-forward:', error);
+      process.exit(1);
+    });
+  } else {
+    runBacktest(dataFile).catch(error => {
+      console.error('❌ Erro no backtesting:', error);
+      process.exit(1);
+    });
+  }
 }
 
-module.exports = { runBacktest, calculateMetrics, loadHistoricalData };
+module.exports = { runBacktest, runWalkForward, calculateMetrics, loadHistoricalData };

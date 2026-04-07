@@ -168,11 +168,21 @@ Rodar:
 node backtest.js
 ```
 
+Walk-forward:
+
+```bash
+node backtest.js btc_1h_sample.csv --walk-forward --train=1500 --test=500 --step=500
+```
+
 Config:
 
 - `BACKTEST_SYMBOL=BTC/USDT`
 - `BACKTEST_TIMEFRAME=1h`
 - `BACKTEST_BANKROLL=10000`
+- `WF_TRAIN_CANDLES=1500`
+- `WF_TEST_CANDLES=500`
+- `WF_STEP_CANDLES=500`
+- `BT_LOOKBACK_CANDLES=100`
 
 ## Calibração de probabilidade
 
@@ -199,6 +209,16 @@ node calibrate-probabilities.js
 | `[BOT] 0 sinais gerados` | sem setup | ajustar `SYMBOLS` / `TIMEFRAME` |
 | `[BOT] Circuit breaker ativo` | ciclo cancelado | reduzir risco / resetar |
 | `[SERVER] FinanceEdge API em` | API no ar | abrir dashboard |
+| `[RISK] ... ATR ausente ...` | fallback SL desativado | ajustar `ALLOW_FIXED_SL_FALLBACK` |
+| `[RISK] ... cluster exposure bloqueado` | correlação alta + exposição | reduzir `MAX_CLUSTER_EXPOSURE_PCT` |
+| `[BOT] Trade aberto:` | nova posição paper | checar dashboard |
+| `[BOT] ... trade já aberto` | duplicado por símbolo | aguardar settlement |
+| `[BOT] risco recusado` | travas risco | rever stake/exposição |
+| `[SETTLE] Erro ao verificar trade` | fetchOHLCV falhou | checar exchange/network |
+| `[DATA] fetchOHLCV ...` | rate limit/timeout | reduzir símbolos / aumentar timeout |
+| `[TG] TELEGRAM_CHAT_ID vazio` | sem alertas | definir `TELEGRAM_CHAT_ID` |
+| `[TG] TELEGRAM_TOKEN ausente` | sem comandos | definir `TELEGRAM_TOKEN` |
+| `[SERVER] 404 Not found` | rota inexistente | conferir endpoint |
 
 ## Variáveis .env
 
@@ -214,6 +234,11 @@ EXCHANGE_API_SECRET=
 USDT_BRL_FALLBACK=
 ALLOW_FIXED_SL_FALLBACK=true
 LOOKBACK_CANDLES=250
+
+GLOBAL_RISK_ENABLED=true
+CORR_LOOKBACK_CANDLES=120
+CORR_THRESHOLD=0.75
+MAX_CLUSTER_EXPOSURE_PCT=0.20
 
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=

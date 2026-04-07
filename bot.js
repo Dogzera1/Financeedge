@@ -5,6 +5,7 @@ const { initExchange, fetchOHLCV, fetchPrice } = require('./lib/data-engine');
 const { generateSignal } = require('./lib/financial-ml');
 const { calcStakeUsdt, calcStopTakeProfit, checkCircuitBreaker, checkRiskGuards } = require('./lib/risk-manager');
 const { paperOpen, paperClose, checkStopTakeProfit } = require('./lib/executor');
+const { pearsonCorrelation, pctReturnsFromCloses } = require('./lib/correlation');
 const initDatabase = require('./lib/database');
 const path = require('path');
 const fs = require('fs');
@@ -18,6 +19,10 @@ const TIMEFRAME = process.env.TIMEFRAME || '1h';
 const LOOKBACK_CANDLES = parseInt(process.env.LOOKBACK_CANDLES || '250');
 const MIN_CONFIDENCE = process.env.MIN_CONFIDENCE || 'MÉDIA'; // BAIXA | MÉDIA | ALTA
 const MIN_EV = parseFloat(process.env.MIN_EV || '3'); // EV mínimo % para abrir trade
+const GLOBAL_RISK_ENABLED = (process.env.GLOBAL_RISK_ENABLED || 'true').toLowerCase() !== 'false';
+const CORR_LOOKBACK_CANDLES = parseInt(process.env.CORR_LOOKBACK_CANDLES || '120');
+const CORR_THRESHOLD = parseFloat(process.env.CORR_THRESHOLD || '0.75');
+const MAX_CLUSTER_EXPOSURE_PCT = parseFloat(process.env.MAX_CLUSTER_EXPOSURE_PCT || '0.20');
 
 let DB_PATH = (process.env.DB_PATH || 'financeedge.db').trim().replace(/^=+/, '');
 try {
@@ -457,6 +462,42 @@ async function runAnalysisCycle() {
     if (!riskCheck.ok) {
       log('WARN', 'BOT', `${signal.symbol}: risco recusado — ${riskCheck.errors.join(', ')}`);
       continue;
+    }
+
+    if (GLOBAL_RISK_ENABLED && openTrades.length > 0) {
+      try {
+        const candidate = await fetchOHLCV(signal.symbol, TIMEFRAME, CORR_LOOKBACK_CANDLES);
+        const cCloses = candidate.map(c => c.close);
+        const cRet = pctReturnsFromCloses(cCloses);
+
+        let clusterExposure = 0;
+        let maxCorr = null;
+        let maxCorrSym = '';
+
+        for (const t of openTrades) {
+          if (!t?.symbol) continue;
+          const tCandles = await fetchOHLCV(t.symbol, TIMEFRAME, CORR_LOOKBACK_CANDLES);
+          const tCloses = tCandles.map(c => c.close);
+          const tRet = pctReturnsFromCloses(tCloses);
+          const corr = pearsonCorrelation(cRet, tRet);
+          if (corr == null) continue;
+          if (maxCorr == null || Math.abs(corr) > Math.abs(maxCorr)) {
+            maxCorr = corr;
+            maxCorrSym = t.symbol;
+          }
+          if (Math.abs(corr) >= CORR_THRESHOLD) {
+            clusterExposure += (t.stake_usdt || 0);
+          }
+        }
+
+        const maxClusterUsdt = currentBk.current_usdt * MAX_CLUSTER_EXPOSURE_PCT;
+        if (clusterExposure + stakeUsdt > maxClusterUsdt) {
+          log('INFO', 'RISK', `${signal.symbol}: cluster exposure bloqueado | corrMax=${maxCorr != null ? maxCorr.toFixed(3) : 'n/a'} ${maxCorrSym} | cluster=$${clusterExposure.toFixed(2)} + stake=$${stakeUsdt.toFixed(2)} > max=$${maxClusterUsdt.toFixed(2)}`);
+          continue;
+        }
+      } catch (e) {
+        log('WARN', 'RISK', `${signal.symbol}: erro correlação — ${e.message}`);
+      }
     }
 
     // Executa paper trade
