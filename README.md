@@ -49,6 +49,10 @@ Porta:
 Endpoint:
 `GET /exchange-status`
 
+Nota:
+
+- `tradeEnabled=false` (paper-only)
+
 ## Banca fictícia BRL
 
 Banca interna em USDT.
@@ -148,6 +152,24 @@ Se quiser bloquear trade sem ATR:
 
 - `ALLOW_FIXED_SL_FALLBACK=false`
 
+## Global Risk Manager (correlação)
+
+Ativo por padrão.
+
+Lógica:
+
+- calcula correlação (Pearson) de retornos
+- compara símbolo novo vs trades abertos
+- soma exposição do cluster correlacionado
+- bloqueia se passar limite
+
+Variáveis:
+
+- `GLOBAL_RISK_ENABLED`
+- `CORR_LOOKBACK_CANDLES`
+- `CORR_THRESHOLD`
+- `MAX_CLUSTER_EXPOSURE_PCT`
+
 ## Settlement (fechamento)
 
 Auto:
@@ -173,6 +195,10 @@ Walk-forward:
 ```bash
 node backtest.js btc_1h_sample.csv --walk-forward --train=1500 --test=500 --step=500
 ```
+
+Requisito:
+
+- walk-forward precisa CSV maior que `btc_1h_sample.csv`
 
 Config:
 
