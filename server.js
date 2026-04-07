@@ -117,6 +117,7 @@ if (EXCHANGE_KEY && EXCHANGE_SECRET) {
 // Símbolos monitorados (configurável via env)
 const SYMBOLS = (process.env.SYMBOLS || 'BTC/USDT,ETH/USDT').split(',').map(s => s.trim());
 const TIMEFRAME = process.env.TIMEFRAME || '1h';
+const LOOKBACK_CANDLES = parseInt(process.env.LOOKBACK_CANDLES || '250');
 
 let lastAnalysisAt = null;
 let circuitBreakerActive = false;
@@ -235,7 +236,7 @@ const server = http.createServer(async (req, res) => {
       const symbol = parsed.query.symbol || SYMBOLS[0];
       const timeframe = parsed.query.timeframe || TIMEFRAME;
       try {
-        const candles = await fetchOHLCV(symbol, timeframe, 200);
+        const candles = await fetchOHLCV(symbol, timeframe, LOOKBACK_CANDLES);
         const signal = generateSignal(candles, symbol, timeframe);
         if (signal) {
           stmts.insertSignal.run({
@@ -528,7 +529,7 @@ const server = http.createServer(async (req, res) => {
       const timeframe = parsed.query.timeframe || TIMEFRAME;
       const out = [];
       for (const symbol of SYMBOLS) {
-        const candles = await fetchOHLCV(symbol, timeframe, 250);
+        const candles = await fetchOHLCV(symbol, timeframe, LOOKBACK_CANDLES);
         const closes = candles.map(c => c.close);
         const rsi = calcRSI(closes, 14);
         const macd = calcMACD(closes);
@@ -558,7 +559,7 @@ const server = http.createServer(async (req, res) => {
       const timeframe = parsed.query.timeframe || TIMEFRAME;
       const out = [];
       for (const symbol of SYMBOLS) {
-        const candles = await fetchOHLCV(symbol, timeframe, 250);
+        const candles = await fetchOHLCV(symbol, timeframe, LOOKBACK_CANDLES);
         const closes = candles.map(c => c.close);
         const ema200 = calcEMA(closes, 200);
         const last = closes[closes.length - 1] || null;

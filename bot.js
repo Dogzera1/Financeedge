@@ -15,6 +15,7 @@ const ADMIN_KEY = (process.env.ADMIN_KEY || '').trim();
 const CYCLE_MIN = parseInt(process.env.CYCLE_MIN || '60'); // ciclo a cada N minutos
 const SYMBOLS = (process.env.SYMBOLS || 'BTC/USDT,ETH/USDT').split(',').map(s => s.trim());
 const TIMEFRAME = process.env.TIMEFRAME || '1h';
+const LOOKBACK_CANDLES = parseInt(process.env.LOOKBACK_CANDLES || '250');
 const MIN_CONFIDENCE = process.env.MIN_CONFIDENCE || 'MÉDIA'; // BAIXA | MÉDIA | ALTA
 const MIN_EV = parseFloat(process.env.MIN_EV || '3'); // EV mínimo % para abrir trade
 
@@ -394,7 +395,7 @@ async function runAnalysisCycle() {
   const signals = [];
   for (const symbol of SYMBOLS) {
     try {
-      const candles = await fetchOHLCV(symbol, TIMEFRAME, 200);
+      const candles = await fetchOHLCV(symbol, TIMEFRAME, LOOKBACK_CANDLES);
       const signal = generateSignal(candles, symbol, TIMEFRAME);
       if (signal) {
         // Salva sinal no DB

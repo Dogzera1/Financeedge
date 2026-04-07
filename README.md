@@ -102,6 +102,41 @@ Perdas 24h:
 - soma `ABS(pnl_usdt)` de trades `loss` nas últimas 24h
 - bloqueia novos trades quando passa `CIRCUIT_BREAKER_PCT`
 
+## Kelly (stake)
+
+Odds padrão:
+
+- `ODDS=2.0`
+
+Fórmula Kelly:
+
+```text
+b = odds - 1
+f* = (p*b - (1 - p)) / b
+stake = f* * kellyFraction
+```
+
+Stake final:
+
+- `0` quando edge <= 0
+- limite superior: `MAX_STAKE_PCT`
+
+`p` vem de:
+
+- `probability-calibrator` (quando calibrado)
+- fallback por EV (quando só EV disponível)
+
+## EV (como calculado)
+
+EV real:
+
+```text
+EV = (p * (odds - 1)) - (1 - p)
+EV% = EV * 100
+```
+
+`MIN_EV` filtra `EV%`.
+
 ## Stop-loss / take-profit
 
 Padrão:
@@ -112,6 +147,18 @@ Padrão:
 Se quiser bloquear trade sem ATR:
 
 - `ALLOW_FIXED_SL_FALLBACK=false`
+
+## Settlement (fechamento)
+
+Auto:
+
+- bot checa trades abertos
+- fecha em `stop_loss` ou `take_profit`
+- atualiza `bankroll` e grava P&L
+
+Fonte:
+
+- candles via CCXT `fetchOHLCV()`
 
 ## Backtesting
 
@@ -147,6 +194,11 @@ node calibrate-probabilities.js
 | `[TG] 409 Conflict` | duas instâncias polling | parar instância duplicada |
 | `[DATA] Exchange inicializada` | CCXT OK | verificar `/exchange-status` |
 | `[ML] ... ev=... conf=...` | sinal gerado | checar `/signals` e `/debug-indicators` |
+| `[SETTLE] ... stop_loss` | trade fechado no SL | checar `/open-trades` |
+| `[SETTLE] ... take_profit` | trade fechado no TP | checar `/trades-history` |
+| `[BOT] 0 sinais gerados` | sem setup | ajustar `SYMBOLS` / `TIMEFRAME` |
+| `[BOT] Circuit breaker ativo` | ciclo cancelado | reduzir risco / resetar |
+| `[SERVER] FinanceEdge API em` | API no ar | abrir dashboard |
 
 ## Variáveis .env
 
@@ -161,6 +213,7 @@ EXCHANGE_API_SECRET=
 
 USDT_BRL_FALLBACK=
 ALLOW_FIXED_SL_FALLBACK=true
+LOOKBACK_CANDLES=250
 
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=
