@@ -56,6 +56,12 @@ let tgBot = null;
 /** Token normalizado após init (para gravar em trade se precisar) */
 let effectiveTelegramToken = '';
 
+function pollingEnabled() {
+  const raw = (process.env.TELEGRAM_POLLING_ENABLED ?? process.env.TELEGRAM_POLLING ?? 'true').toString().trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return true;
+}
+
 function normalizeTelegramToken(raw) {
   if (raw == null) return '';
   let t = String(raw).trim().replace(/^=+/, '');
@@ -81,11 +87,23 @@ async function initTelegramBot() {
     return null;
   }
 
+  if (!pollingEnabled()) {
+    log('WARN', 'TG', 'TELEGRAM_POLLING desativado — sem polling (evita erro 409)');
+    effectiveTelegramToken = token;
+    return null;
+  }
+
   const bot = new TelegramBot(token, { polling: true });
   let pollingStopped = false;
   bot.on('polling_error', err => {
     const code = err.response?.statusCode || err.response?.status;
     const msg = String(err.message || err);
+    if (!pollingStopped && (code === 409 || msg.includes('409'))) {
+      pollingStopped = true;
+      try { bot.stopPolling({ cancel: true }); } catch (_) {}
+      log('ERROR', 'TG', '409 Conflict — outro processo usando getUpdates. Pare instância duplicada ou desative TELEGRAM_POLLING.');
+      return;
+    }
     if (!pollingStopped && (code === 401 || msg.includes('401'))) {
       pollingStopped = true;
       try { bot.stopPolling({ cancel: true }); } catch (_) {}
