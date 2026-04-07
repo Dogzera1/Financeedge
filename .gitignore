@@ -1,0 +1,18 @@
+node_modules/
+.env
+*.log
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Backtest / grid-search outputs
+backtest_results_*.json
+grid_search_checkpoint_*.json
+grid_search_results_*.json
+probability-cache.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
