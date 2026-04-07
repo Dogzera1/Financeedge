@@ -5,7 +5,7 @@ const url = require('url');
 const fs = require('fs');
 const initDatabase = require('./lib/database');
 const { log, sendJson, safeParse, httpGet, httpPost } = require('./lib/utils');
-const { initExchange, fetchOHLCV, fetchPrice, getCacheStatus } = require('./lib/data-engine');
+const { initExchange, fetchOHLCV, fetchPrice, getCacheStatus, fetchUSDTBRL, fetchTicker, getExchangeStatus } = require('./lib/data-engine');
 const { generateSignal } = require('./lib/financial-ml');
 const { calcStakeUsdt, calcStopTakeProfit, checkCircuitBreaker, CONFIG } = require('./lib/risk-manager');
 const { paperOpen, paperClose, calcUnrealizedPnL } = require('./lib/executor');
@@ -86,6 +86,7 @@ const ADMIN_ROUTES_POST = new Set([
   '/open-trade',
   '/close-trade',
   '/set-bankroll',
+  '/set-bankroll-brl',
   '/circuit-breaker',
   '/save-user',
   '/record-analysis',
@@ -150,6 +151,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/health') {
       const bk = stmts.getBankroll.get();
       const openCount = stmts.openTradeCount.get();
+      const fx = await fetchUSDTBRL().catch(() => null);
       sendJson(res, {
         status: circuitBreakerActive ? 'circuit_breaker' : 'ok',
         mode: MODE,
@@ -159,8 +161,60 @@ const server = http.createServer(async (req, res) => {
         lastAnalysis: lastAnalysisAt,
         openTrades: openCount?.c || 0,
         bankroll: bk ? { current: bk.current_usdt, initial: bk.initial_usdt } : null,
+        usdtBrl: fx,
         circuitBreaker: circuitBreakerActive,
       });
+      return;
+    }
+
+    // ── Status Binance/Exchange ──
+    if (p === '/exchange-status') {
+      const st = getExchangeStatus();
+      const sample = await fetchTicker(SYMBOLS[0] || 'BTC/USDT').catch(() => null);
+      sendJson(res, {
+        ...st,
+        symbol: SYMBOLS[0] || 'BTC/USDT',
+        publicOk: !!sample,
+        sampleTicker: sample ? {
+          last: sample.last || sample.close || null,
+          bid: sample.bid || null,
+          ask: sample.ask || null,
+          ts: sample.timestamp || null,
+        } : null,
+      });
+      return;
+    }
+
+    // ── FX USDT/BRL ──
+    if (p === '/fx/usdtbrl') {
+      const fx = await fetchUSDTBRL().catch(() => null);
+      const fallback = parseFloat(process.env.USDT_BRL_FALLBACK || '0') || null;
+      sendJson(res, { rate: fx || fallback, source: fx ? 'exchange' : 'fallback' });
+      return;
+    }
+
+    // ── Dashboard (HTML) ──
+    if (p === '/' || p === '/dashboard') {
+      const filePath = path.join(__dirname, 'public', 'dashboard.html');
+      try {
+        const html = fs.readFileSync(filePath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+      } catch (e) {
+        sendJson(res, { error: 'dashboard_not_found', detail: e.message }, 500);
+      }
+      return;
+    }
+
+    if (p === '/dashboard.js') {
+      const filePath = path.join(__dirname, 'public', 'dashboard.js');
+      try {
+        const js = fs.readFileSync(filePath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+        res.end(js);
+      } catch (e) {
+        sendJson(res, { error: 'dashboard_js_not_found', detail: e.message }, 500);
+      }
       return;
     }
 
@@ -377,6 +431,31 @@ const server = http.createServer(async (req, res) => {
           log('INFO', 'BANCA', `Banca redefinida: $${v.toFixed(2)}`);
           sendJson(res, { ok: true, current: v });
         } catch (e) { sendJson(res, { error: e.message }, 500); }
+      return;
+    }
+
+    // ── Bankroll BRL (converte p/ USDT internamente) ──
+    if (p === '/set-bankroll-brl' && req.method === 'POST') {
+      const body = await readJsonBody(req, res);
+      if (body == null) return;
+      try {
+        const { valorBrl } = safeParse(body, {});
+        const v = parseFloat(valorBrl);
+        if (!v || v <= 0) { sendJson(res, { ok: false, error: 'valorBrl inválido' }, 400); return; }
+
+        const fx = await fetchUSDTBRL().catch(() => null);
+        const fallback = parseFloat(process.env.USDT_BRL_FALLBACK || '0') || null;
+        const rate = fx || fallback;
+        if (!rate || rate <= 0) {
+          sendJson(res, { ok: false, error: 'usdtbrl_rate_unavailable', hint: 'Defina USDT_BRL_FALLBACK no Railway' }, 503);
+          return;
+        }
+
+        const usdt = parseFloat((v / rate).toFixed(6));
+        stmts.resetBankroll.run(usdt, usdt);
+        log('INFO', 'BANCA', `Banca redefinida: R$${v.toFixed(2)} (~$${usdt}) @ ${rate}`);
+        sendJson(res, { ok: true, currency: 'BRL', currentBrl: v, currentUsdt: usdt, usdtBrl: rate, source: fx ? 'exchange' : 'fallback' });
+      } catch (e) { sendJson(res, { ok: false, error: e.message }, 500); }
       return;
     }
 
