@@ -61,6 +61,12 @@ function isCommandAllowed(chatId) {
 let tgBot = null;
 /** Token normalizado após init (para gravar em trade se precisar) */
 let effectiveTelegramToken = '';
+const knownChatIds = new Set();
+
+function rememberChatId(chatId) {
+  if (chatId == null) return;
+  knownChatIds.add(String(chatId));
+}
 
 function pollingEnabled() {
   const raw = (process.env.TELEGRAM_POLLING_ENABLED ?? process.env.TELEGRAM_POLLING ?? 'true').toString().trim().toLowerCase();
@@ -120,10 +126,12 @@ async function initTelegramBot() {
   });
 
   async function reply(chatId, text, opts = {}) {
+    rememberChatId(chatId);
     await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...opts });
   }
 
   async function guard(msg) {
+    rememberChatId(msg?.chat?.id);
     if (!isCommandAllowed(msg.chat.id)) {
       await reply(msg.chat.id, '⛔ Chat não autorizado. Configure <code>TELEGRAM_CHAT_ID</code> com este ID ou deixe vazio para aceitar qualquer chat.');
       return false;
@@ -282,9 +290,10 @@ async function initTelegramBot() {
 // ── Telegram (alertas push) ──
 async function sendTelegram(msg) {
   if (!tgBot) return;
-  const chats = parseChatIds();
+  const envChats = parseChatIds();
+  const chats = envChats.length ? envChats : Array.from(knownChatIds);
   if (!chats.length) {
-    log('WARN', 'TG', 'TELEGRAM_CHAT_ID vazio — alertas não enviados (use /start no bot para ver seu chat_id)');
+    log('WARN', 'TG', 'Nenhum chat conhecido — alertas não enviados (use /start no bot para registrar chat_id)');
     return;
   }
   for (const chatId of chats) {

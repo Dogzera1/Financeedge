@@ -53,6 +53,17 @@ Nota:
 
 - `tradeEnabled=false` (paper-only)
 
+## Telegram: alertas
+
+Preferido:
+
+- definir `TELEGRAM_CHAT_ID`
+
+Fallback:
+
+- se `TELEGRAM_CHAT_ID` vazio
+- bot envia alertas para chats que rodaram `/start` após boot
+
 ## Banca fictícia BRL
 
 Banca interna em USDT.
