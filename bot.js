@@ -17,8 +17,8 @@ const CYCLE_MIN = parseInt(process.env.CYCLE_MIN || '60'); // ciclo a cada N min
 const SYMBOLS = (process.env.SYMBOLS || 'BTC/USDT,ETH/USDT').split(',').map(s => s.trim());
 const TIMEFRAME = process.env.TIMEFRAME || '1h';
 const LOOKBACK_CANDLES = parseInt(process.env.LOOKBACK_CANDLES || '250');
-const MIN_CONFIDENCE = process.env.MIN_CONFIDENCE || 'MÉDIA'; // BAIXA | MÉDIA | ALTA
-const MIN_EV = parseFloat(process.env.MIN_EV || '3'); // EV mínimo % para abrir trade
+const MIN_CONFIDENCE = process.env.MIN_CONFIDENCE || 'BAIXA'; // BAIXA | MÉDIA | ALTA
+const MIN_EV = parseFloat(process.env.MIN_EV || '0.5'); // EV mínimo % para abrir trade
 const GLOBAL_RISK_ENABLED = (process.env.GLOBAL_RISK_ENABLED || 'true').toLowerCase() !== 'false';
 const CORR_LOOKBACK_CANDLES = parseInt(process.env.CORR_LOOKBACK_CANDLES || '120');
 const CORR_THRESHOLD = parseFloat(process.env.CORR_THRESHOLD || '0.75');
