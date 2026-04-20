@@ -1,6 +1,7 @@
 require('dotenv').config({ override: true });
 const TelegramBot = require('node-telegram-bot-api');
-const { log, httpGet, httpPost, fmtDateTime, sleep, safeParse } = require('./lib/utils');
+const http = require('http');
+const { log, httpGet, httpPost, fmtDateTime, sleep, safeParse, sendJson } = require('./lib/utils');
 const { initExchange, fetchOHLCV, fetchPrice } = require('./lib/data-engine');
 const { generateSignal } = require('./lib/financial-ml');
 const { calcStakeUsdt, calcStopTakeProfit, checkCircuitBreaker, checkRiskGuards } = require('./lib/risk-manager');
@@ -11,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 
 const SERVER_URL = process.env.SERVER_URL || `http://127.0.0.1:${process.env.SERVER_PORT || 3001}`;
+const HTTP_PORT = parseInt(process.env.BOT_HTTP_PORT || process.env.PORT || '8080');
 const MODE = (process.env.MODE || 'paper').toLowerCase();
 const ADMIN_KEY = (process.env.ADMIN_KEY || '').trim();
 const CYCLE_MIN = parseInt(process.env.CYCLE_MIN || '60'); // ciclo a cada N minutos
@@ -573,8 +575,92 @@ async function sendStatusReport() {
   await sendTelegram(msg);
 }
 
+// ── HTTP Server (health + status) ──
+function startHttpServer() {
+  const server = http.createServer(async (req, res) => {
+    const { pathname } = new URL(req.url, `http://localhost`);
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+      res.end();
+      return;
+    }
+
+    if (pathname === '/health') {
+      const bk = stmts.getBankroll.get();
+      const openCount = stmts.openTradeCount.get()?.c || 0;
+      sendJson(res, {
+        status: 'ok',
+        bot: 'running',
+        mode: MODE,
+        symbols: SYMBOLS,
+        timeframe: TIMEFRAME,
+        openTrades: openCount,
+        bankroll: bk ? { current: bk.current_usdt, initial: bk.initial_usdt } : null,
+        uptime: Math.floor(process.uptime()),
+        ts: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (pathname === '/status') {
+      const bk = stmts.getBankroll.get();
+      const roi = stmts.getROI.get();
+      const openCount = stmts.openTradeCount.get()?.c || 0;
+      const openTrades = stmts.getOpenTrades.all();
+      const settled = roi?.total || 0;
+      const winRate = settled > 0 ? ((roi.wins / settled) * 100).toFixed(1) : '0.0';
+      const growthPct = bk
+        ? ((bk.current_usdt - bk.initial_usdt) / bk.initial_usdt * 100).toFixed(2)
+        : '0.00';
+      sendJson(res, {
+        mode: MODE,
+        symbols: SYMBOLS,
+        timeframe: TIMEFRAME,
+        bankroll: bk
+          ? { current: bk.current_usdt, initial: bk.initial_usdt, growthPct: parseFloat(growthPct) }
+          : null,
+        openTrades: openCount,
+        positions: openTrades.map(t => ({
+          id: t.id,
+          symbol: t.symbol,
+          direction: t.direction,
+          entryPrice: t.entry_price,
+          stakeUsdt: t.stake_usdt,
+          openedAt: t.opened_at,
+        })),
+        performance: {
+          total: settled,
+          wins: roi?.wins || 0,
+          losses: roi?.losses || 0,
+          winRate,
+          totalPnlUsdt: roi?.total_pnl_usdt || 0,
+        },
+        uptime: Math.floor(process.uptime()),
+        ts: new Date().toISOString(),
+      });
+      return;
+    }
+
+    sendJson(res, { error: 'not_found', path: pathname }, 404);
+  });
+
+  server.on('error', e => log('ERROR', 'HTTP', `Server error: ${e.message}`));
+  server.listen(HTTP_PORT, () => {
+    log('INFO', 'HTTP', `HTTP server listening on port ${HTTP_PORT} — /health, /status`);
+  });
+
+  return server;
+}
+
 // ── Loop principal ──
 async function main() {
+  startHttpServer();
+
   tgBot = await initTelegramBot();
 
   log('INFO', 'BOT', `FinanceEdge Bot iniciado | modo=${MODE.toUpperCase()} | ciclo=${CYCLE_MIN}min`);
